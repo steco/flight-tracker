@@ -350,7 +350,8 @@ AIRLINE_NAMES = {
     "EXS": "Jet2",            "VIR": "Virgin Atlantic", "LOG": "Loganair",
     "SHT": "BA Shuttle",      "CFE": "BA CityFlyer",    "ENT": "Air Transat",
     "VGI": "Virgin Atlantic", "EFW": "BA Euroflyer",    "WUK": "Wizz Air UK",
-    # European majors you'll commonly see over Kent
+    "HLE": "Air Ambulance",   "SYG": "Ascend Airways",  "UBT": "Norse Atlantic UK",
+    # European
     "RYR": "Ryanair",         "WZZ": "Wizz Air",        "EWG": "Eurowings",
     "AFR": "Air France",      "DLH": "Lufthansa",       "KLM": "KLM",
     "IBE": "Iberia",          "VLG": "Vueling",         "TAP": "TAP Portugal",
@@ -358,18 +359,23 @@ AIRLINE_NAMES = {
     "NAX": "Norwegian",       "SAS": "Scandinavian",    "FIN": "Finnair",
     "AZA": "ITA Airways",     "TRA": "Transavia",       "TVF": "Transavia FR",
     "NOS": "Neos",            "TCX": "Thomas Cook",     "FHY": "Freebird",
-    "ITY": "ITA Airways",     "NOS": "Norwegian",       "PTN": "Platoon Aviation",
-    "NBT": "Norse Atlantic Airways",
+    "ITY": "ITA Airways",     "NOZ": "Norwegian",       "PTN": "Platoon Aviation",
+    "NBT": "Norse Atlantic Airways",                    "SXS": "SunExpress",
+    "HOP": "Air France Hop",  "AHY": "Finnair",         "BTI": "airBaltic",
+    "CFG": "Condor Flugdienst",                         "EIN": "Aer Lingus",
+    "KMM": "KM Malta",        "LHX": "Lufthansa City",  "LXJ": "Flexjet",
     # Middle East
     "UAE": "Emirates",        "ETD": "Etihad",          "QTR": "Qatar",
     "THY": "Turkish",         "ELY": "El Al",           "SVA": "Saudi",
+    "RJA": "Royal Jordanian",
     # North America
     "AAL": "American",        "UAL": "United",          "DAL": "Delta",
-    "ACA": "Air Canada",      "WJA": "WestJet",
+    "ACA": "Air Canada",      "WJA": "WestJet",         "EVA": "EVA Air",
     # Asia / Other
     "SIA": "Singapore Air",   "CPA": "Cathay Pacific",  "ANA": "ANA",
     "JAL": "Japan Airlines",  "QFA": "Qantas",          "ETH": "Ethiopian",
     "MSR": "EgyptAir",        "RAM": "Royal Air Maroc", "CES": "China Eastern Airlines",
+    "AIC": "Air India",       "CSN": "China Southern",  "MAS": "Malaysia Airlines",
     # Cargo
     "FDX": "FedEx",           "UPS": "UPS",             "BCS": "European Air",
     "DHL": "DHL Air",
