@@ -37,6 +37,7 @@ import urequests
 import utime
 import math
 import json
+import gc
 from galactic import GalacticUnicorn
 from picographics import PicoGraphics, DISPLAY_GALACTIC_UNICORN as DISPLAY
 
@@ -351,6 +352,7 @@ AIRLINE_NAMES = {
     "SHT": "BA Shuttle",      "CFE": "BA CityFlyer",    "ENT": "Air Transat",
     "VGI": "Virgin Atlantic", "EFW": "BA Euroflyer",    "WUK": "Wizz Air UK",
     "HLE": "Air Ambulance",   "SYG": "Ascend Airways",  "UBT": "Norse Atlantic UK",
+    "AUR": "Aurigny",
     # European
     "RYR": "Ryanair",         "WZZ": "Wizz Air",        "EWG": "Eurowings",
     "AFR": "Air France",      "DLH": "Lufthansa",       "KLM": "KLM",
@@ -364,13 +366,15 @@ AIRLINE_NAMES = {
     "HOP": "Air France Hop",  "AHY": "Finnair",         "BTI": "airBaltic",
     "CFG": "Condor Flugdienst",                         "EIN": "Aer Lingus",
     "KMM": "KM Malta",        "LHX": "Lufthansa City",  "LXJ": "Flexjet",
+    "NSZ": "Norwegian Air Sweden",                      "VJH": "VistaJet",
     # Middle East
     "UAE": "Emirates",        "ETD": "Etihad",          "QTR": "Qatar",
     "THY": "Turkish",         "ELY": "El Al",           "SVA": "Saudi",
-    "RJA": "Royal Jordanian",
+    "RJA": "Royal Jordanian", "KAC": "Kuwait Airways",
     # North America
     "AAL": "American",        "UAL": "United",          "DAL": "Delta",
     "ACA": "Air Canada",      "WJA": "WestJet",         "EVA": "EVA Air",
+    "GTI": "Atlas Air",
     # Asia / Other
     "SIA": "Singapore Air",   "CPA": "Cathay Pacific",  "ANA": "ANA",
     "JAL": "Japan Airlines",  "QFA": "Qantas",          "ETH": "Ethiopian",
@@ -468,17 +472,18 @@ def plane_segments(plane, now_unix):
     # Append route info from FlightAware if available
     info = get_flightaware_cached(callsign, now_unix)
     
-    segments = []
-
     org = None
     dst = None
     airline = None
+    aircraft_type = None
 
     if info:
         org = info.get("origin")
         dst = info.get("destination")
         airline = info.get("airline")
         aircraft_type = info.get("type")
+
+    segments = []
     
     segments.append((callsign, CYAN))
 
@@ -545,5 +550,13 @@ def main():
                 if scroll_segments(plane_segments(plane, now)):
                     last_refresh = -REFRESH_SECS
                     break
+
+        # Ensure we don't run out of contiguous memory
+        gc.collect()
+
+        if gc.mem_free() < 20000:
+            _fa_cache.clear()
+            gc.collect()
+            print("Low memory – cache cleared, free: " + str(gc.mem_free()))
 
 main()
