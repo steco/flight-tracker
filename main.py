@@ -35,6 +35,7 @@ BUTTONS (on the back of the board)
 import network
 import urequests
 import utime
+import ntptime
 import math
 import json
 import gc
@@ -55,7 +56,6 @@ except ImportError:
     raise SystemExit("secrets.py not found – copy secrets_template.py and fill it in")
 
 RADIUS_KM = 10      # Half-width of the search bounding box in km
-
 REFRESH_SECS = 60   # How often to re-poll the flight data API
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,6 +80,16 @@ TOKEN_URL = (
 # Refresh the Bearer token this many seconds before it actually expires
 TOKEN_REFRESH_MARGIN = 60
 
+# FlightAware cache TTLs (in seconds)
+FA_CACHE_SECS      = 7 * 24 * 60 * 60   # 7 days  – route data doesn't change
+FA_CACHE_MISS_SECS = 4 * 60 * 60         # 4 hours – retry failed lookups
+
+# Path on the Pico filesystem where the FA cache is persisted
+CACHE_FILE = "fa_cache.json"
+
+# Maximum FlightAware API calls per calendar month (free tier limit)
+FA_MONTHLY_LIMIT = 1000
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Hardware init
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,9 +98,9 @@ gu = GalacticUnicorn()
 graphics = PicoGraphics(DISPLAY)
 wlan = network.WLAN(network.STA_IF)
 
-DELAY_MS = 50
-MIN_DELAY_MS     = 5
-MAX_DELAY_MS     = 200
+DELAY_MS     = 50
+MIN_DELAY_MS = 5
+MAX_DELAY_MS = 200
 
 WIDTH  = GalacticUnicorn.WIDTH   # 53
 HEIGHT = GalacticUnicorn.HEIGHT  # 11
@@ -108,7 +118,7 @@ ORANGE = graphics.create_pen(255, 140, 0)
 graphics.set_font("bitmap8")
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Wi-Fi
+#  Wi-Fi and NTP
 # ─────────────────────────────────────────────────────────────────────────────
 
 def connect_wifi():
@@ -121,9 +131,30 @@ def connect_wifi():
             utime.sleep(1)
             timeout -= 1
     if wlan.isconnected():
+        sync_ntp()
         display_wan_status()
         return True
     scroll_message("WiFi FAIL", RED)
+    return False
+
+def sync_ntp():
+    """Sync the Pico's RTC to real UTC time via NTP. Retries up to 3 times."""
+    for attempt in range(3):
+        try:
+            ntptime.settime()
+
+            t = utime.localtime()
+            print("NTP sync OK – {:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(
+                t[0], t[1], t[2], t[3], t[4], t[5]
+            ))
+            return True
+        except Exception as e:
+            print("NTP attempt " + str(attempt + 1) + " failed: " + str(e))
+            utime.sleep(2)
+    # Non-fatal – log it and carry on. Cache TTLs will be wrong but
+    # everything else will still work.
+    print("NTP sync failed – timestamps may be unreliable")
+    scroll_message("NTP FAIL", RED)
     return False
 
 def display_wan_status():
@@ -143,13 +174,12 @@ def clear():
 
 def adjust_scroll_speed():
     global DELAY_MS
-
     if gu.is_pressed(GalacticUnicorn.SWITCH_B):
-         DELAY_MS = min(MAX_DELAY_MS, DELAY_MS + 1)
-         utime.sleep_ms(50)
+        DELAY_MS = min(MAX_DELAY_MS, DELAY_MS + 1)
+        utime.sleep_ms(50)
     if gu.is_pressed(GalacticUnicorn.SWITCH_C):
-         DELAY_MS = max(MIN_DELAY_MS, DELAY_MS - 1)
-         utime.sleep_ms(50)
+        DELAY_MS = max(MIN_DELAY_MS, DELAY_MS - 1)
+        utime.sleep_ms(50)
 
 def scroll_message(msg, colour=WHITE, loops=1):
     """Scroll a single-colour message. Returns early if button A is pressed."""
@@ -163,9 +193,7 @@ def scroll_message(msg, colour=WHITE, loops=1):
             gu.update(graphics)
             x -= 1
             utime.sleep_ms(DELAY_MS)
-            
             adjust_scroll_speed()
-            
             if gu.is_pressed(GalacticUnicorn.SWITCH_A):
                 return
 
@@ -188,9 +216,7 @@ def scroll_segments(segments):
         gu.update(graphics)
         x -= 1
         utime.sleep_ms(DELAY_MS)
-
         adjust_scroll_speed()
-
         if gu.is_pressed(GalacticUnicorn.SWITCH_A):
             return True
     return False
@@ -200,7 +226,7 @@ def scroll_segments(segments):
 # ─────────────────────────────────────────────────────────────────────────────
 
 _access_token  = None
-_token_expires = 0   # utime.time() value at which the cached token becomes stale
+_token_expires = 0
 
 def _fetch_token():
     """POST client credentials to OpenSky's token endpoint and cache the result."""
@@ -226,8 +252,7 @@ def _fetch_token():
         resp.close()
 
         _access_token  = data["access_token"]
-        
-        expires_in     = data.get("expires_in", 1800)   # OpenSky tokens last ~30 min
+        expires_in     = data.get("expires_in", 1800)
         _token_expires = utime.time() + expires_in - TOKEN_REFRESH_MARGIN
         return True, None
 
@@ -253,9 +278,6 @@ def fetch_planes():
     """
     Query OpenSky for airborne aircraft in the configured bounding box.
     Returns (list_of_plane_dicts, None) or (None, error_string).
-
-    Each dict contains: icao24, callsign, country, lat, lon,
-                        altitude_m, velocity_ms, heading
     """
     global _access_token
 
@@ -271,11 +293,9 @@ def fetch_planes():
         "&lomax=" + str(round(LON_MAX, 4))
     )
 
-    try:
+    try:        
         resp = urequests.get(url, headers=headers)
-
         if resp.status_code == 401:
-            # Token was rejected - clear it so _fetch_token() runs next time
             _access_token = None
             resp.close()
             return None, "Token rejected, retry"
@@ -290,18 +310,8 @@ def fetch_planes():
 
         planes = []
         for s in states:
-            # OpenSky state vector field indices:
-            # 0  icao24            unique transponder address
-            # 1  callsign          flight number / registration
-            # 2  origin_country
-            # 5  longitude (deg)
-            # 6  latitude  (deg)
-            # 7  baro_altitude (m)
-            # 8  on_ground   (bool)
-            # 9  velocity    (m/s)
-            # 10 true_track  (deg, clockwise from north)
             if s[8]:
-                continue   # skip anything on the ground
+                continue
             planes.append({
                 "icao24":     (s[0] or "??????").strip(),
                 "callsign":   (s[1] or "N/A").strip(),
@@ -328,8 +338,6 @@ def ms_to_kts(ms):
     return int(ms * 1.94384)
 
 def heading_to_arrow(hdg):
-    arrows = ["^", "/", ">", "\\", "v", "\\", "<", "/"]
-    # Use simpler ASCII arrows for reliable rendering on the bitmap font
     compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
     return compass[int((hdg + 22.5) / 45) % 8]
 
@@ -345,6 +353,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Airline names
 # ─────────────────────────────────────────────────────────────────────────────
+
 AIRLINE_NAMES = {
     # UK carriers
     "BAW": "British Airways", "EZY": "easyJet",        "TOM": "TUI",
@@ -352,7 +361,7 @@ AIRLINE_NAMES = {
     "SHT": "BA Shuttle",      "CFE": "BA CityFlyer",    "ENT": "Air Transat",
     "VGI": "Virgin Atlantic", "EFW": "BA Euroflyer",    "WUK": "Wizz Air UK",
     "HLE": "Air Ambulance",   "SYG": "Ascend Airways",  "UBT": "Norse Atlantic UK",
-    "AUR": "Aurigny",
+    "AUR": "Aurigny",         "AWC": "Titan Airways",
     # European
     "RYR": "Ryanair",         "WZZ": "Wizz Air",        "EWG": "Eurowings",
     "AFR": "Air France",      "DLH": "Lufthansa",       "KLM": "KLM",
@@ -362,11 +371,11 @@ AIRLINE_NAMES = {
     "AZA": "ITA Airways",     "TRA": "Transavia",       "TVF": "Transavia FR",
     "NOS": "Neos",            "TCX": "Thomas Cook",     "FHY": "Freebird",
     "ITY": "ITA Airways",     "NOZ": "Norwegian",       "PTN": "Platoon Aviation",
-    "NBT": "Norse Atlantic Airways",                    "SXS": "SunExpress",
+    "NBT": "Norse Atlantic",  "SXS": "SunExpress",      "EJU": "easyJet Europe",
     "HOP": "Air France Hop",  "AHY": "Finnair",         "BTI": "airBaltic",
-    "CFG": "Condor Flugdienst",                         "EIN": "Aer Lingus",
+    "CFG": "Condor",          "EIN": "Aer Lingus",      "EZS": "easyJet Switzerland",
     "KMM": "KM Malta",        "LHX": "Lufthansa City",  "LXJ": "Flexjet",
-    "NSZ": "Norwegian Air Sweden",                      "VJH": "VistaJet",
+    "NSZ": "Norwegian Sweden","VJH": "VistaJet",
     # Middle East
     "UAE": "Emirates",        "ETD": "Etihad",          "QTR": "Qatar",
     "THY": "Turkish",         "ELY": "El Al",           "SVA": "Saudi",
@@ -378,8 +387,9 @@ AIRLINE_NAMES = {
     # Asia / Other
     "SIA": "Singapore Air",   "CPA": "Cathay Pacific",  "ANA": "ANA",
     "JAL": "Japan Airlines",  "QFA": "Qantas",          "ETH": "Ethiopian",
-    "MSR": "EgyptAir",        "RAM": "Royal Air Maroc", "CES": "China Eastern Airlines",
+    "MSR": "EgyptAir",        "RAM": "Royal Air Maroc", "CES": "China Eastern",
     "AIC": "Air India",       "CSN": "China Southern",  "MAS": "Malaysia Airlines",
+    "IGO": "IndiGo",
     # Cargo
     "FDX": "FedEx",           "UPS": "UPS",             "BCS": "European Air",
     "DHL": "DHL Air",
@@ -395,39 +405,104 @@ def airline_name(code):
     return name
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  FlightAware AeroAPI  -  real-time route, airline, origin, destination
+#  FlightAware cache  –  persisted to flash with real Unix timestamps
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Cache: callsign -> (flight_info_dict, cached_at_unix)
-# Keyed by callsign rather than icao24 as AeroAPI is callsign-based.
+# In-memory cache: callsign -> (info_dict_or_None, cached_at_unix)
 _fa_cache = {}
-FA_CACHE_SECS = 600   # 10 minutes - route won't change mid-flight
 
-FA_CACHE_SECS         = 24*60*60   # 12 hours  – route never changes mid-flight
-FA_CACHE_MISS_SECS    = 4*60*60       # 4 hours  – retry unknown/GA aircraft less often
+# Monthly API call counter – persisted in the same file as the cache
+# Resets automatically when the calendar month changes
+_fa_call_count = 0    # calls made this calendar month
+_fa_call_month = 0    # month (1-12) the counter belongs to
+
+# Set of non-commercial callsigns we've already logged, to suppress repeat prints
+_non_commercial_seen = set()
+
+def load_cache():
+    """Load the persisted FA cache and monthly call counter from flash on startup."""
+    global _fa_call_count, _fa_call_month
+    try:
+        with open(CACHE_FILE, "r") as f:
+            raw = json.load(f)
+        for k, v in raw.items():
+            if k == "__meta__":
+                continue   # skip the metadata entry
+            # v is [info, cached_at_unix]  — real Unix timestamps survive restarts
+            _fa_cache[k] = (v[0], v[1])
+        # Load monthly counter from the metadata entry
+        meta = raw.get("__meta__", {})
+        _fa_call_count = meta.get("call_count", 0)
+        _fa_call_month = meta.get("call_month", 0)
+        print("Loaded " + str(len(_fa_cache)) + " FA cache entries from flash")
+        print("FA calls this month: " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT))
+    except Exception as e:
+        print("Cache load: " + str(e) + " (starting fresh)")
+ 
+def save_cache():
+    """Persist the current in-memory FA cache and monthly counter to flash."""
+    try:
+        raw = {"__meta__": {"call_count": _fa_call_count, "call_month": _fa_call_month}}
+        for k, (info, cached_at) in _fa_cache.items():
+            raw[k] = [info, cached_at]
+        with open(CACHE_FILE, "w") as f:
+            json.dump(raw, f)
+    except Exception as e:
+        print("Cache save failed: " + str(e))
+
+def _is_commercial_callsign(callsign):
+    """
+    Returns True only for callsigns that look like scheduled airline flights
+    (3-letter ICAO operator code followed by digits/letters, e.g. BAW123, EZY4BV).
+    Filters out registrations like G-ABCD, N12345, and military callsigns.
+    """
+    if len(callsign) < 4:
+        return False
+    if not callsign[:3].isalpha():
+        return False
+    if not any(c.isdigit() for c in callsign[3:]):
+        return False
+    return True
 
 def fetch_flightaware(callsign):
     """
     Query FlightAware AeroAPI for the current flight with this callsign.
-    Returns a dict with keys: origin, destination, airline  (all may be None).
-    Returns None on any network/API failure.
+    Returns a dict with keys: origin, destination, airline, type  (all may be None).
+    Returns None on any network/API failure or if the monthly call limit is reached.
 
     AeroAPI endpoint: GET /flights/{ident}
     Docs: https://flightaware.com/commercial/aeroapi/documentation
     """
+    global _fa_call_count, _fa_call_month
+ 
     if not AEROAPI_KEY or AEROAPI_KEY == "YOUR_AEROAPI_KEY":
+        return None
+ 
+    # Reset counter if we're in a new calendar month
+    current_month = utime.localtime()[1]
+    if current_month != _fa_call_month:
+        print("New month – resetting FA call counter (was " + str(_fa_call_count) + ")")
+        _fa_call_count = 0
+        _fa_call_month = current_month
+        save_cache()
+ 
+    # Enforce monthly limit
+    if _fa_call_count >= FA_MONTHLY_LIMIT:
+        print("FA monthly limit reached (" + str(FA_MONTHLY_LIMIT) + ") – skipping: " + callsign)
         return None
 
     url = "https://aeroapi.flightaware.com/aeroapi/flights/" + callsign
     headers = {"x-apikey": AEROAPI_KEY}
 
     try:
-        print("FlightAware call: " + callsign)
+        _fa_call_count += 1
+        print("FlightAware call " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT) + ": " + callsign)
         resp = urequests.get(url, headers=headers)
 
         if resp.status_code != 200:
             resp.close()
             return None
+
         data = resp.json()
         resp.close()
 
@@ -444,36 +519,22 @@ def fetch_flightaware(callsign):
             "origin":      origin.get("name"),
             "destination": destination.get("name"),
             "airline":     airline_name(f.get("operator") or f.get("airline_iata")),
-            "type":        f.get("aircraft_type")
+            "type":        f.get("aircraft_type"),
         }
 
     except Exception as e:
-        print("Exception: " + str(e))
+        print("FA exception: " + str(e))
         return None
 
-def _is_commercial_callsign(callsign):
-    """
-    Returns True only for callsigns that look like scheduled airline flights
-    (3-letter ICAO operator code followed by 1-4 digits, e.g. BAW123, EZY4BV).
-    Filters out registrations like G-ABCD, N12345, and military callsigns.
-    """
-    if len(callsign) < 4:
-        return False
-    # First 3 chars should be letters (ICAO operator code)
-    if not callsign[:3].isalpha():
-        return False
-    # Must have at least one digit after the operator code
-    if not any(c.isdigit() for c in callsign[3:]):
-        return False
-    return True
-    
-_non_commercial_seen = set()
-
 def get_flightaware_cached(callsign, now_unix):
-    """Return cached FlightAware info for callsign, fetching fresh if stale."""
+    """
+    Return cached FlightAware info for callsign, fetching fresh if stale.
+    Non-commercial callsigns are silently skipped after the first log message.
+    Cache is persisted to flash so TTLs survive reboots.
+    """
     if not _is_commercial_callsign(callsign):
         if callsign not in _non_commercial_seen:
-            print("Non-commercial flight - skipping FlightAware call: " + callsign)
+            print("Non-commercial - skipping: " + callsign)
             _non_commercial_seen.add(callsign)
         return None
 
@@ -485,6 +546,7 @@ def get_flightaware_cached(callsign, now_unix):
 
     info = fetch_flightaware(callsign)
     _fa_cache[callsign] = (info, now_unix)
+    save_cache()   # persist immediately after every new fetch
     return info
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -498,7 +560,7 @@ def plane_segments(plane, now_unix):
     hdg       = int(plane["heading"])
     direction = heading_to_arrow(hdg)
 
-    # Append route info from FlightAware if available
+   # Append route info from FlightAware if available
     info = get_flightaware_cached(callsign, now_unix)
     
     org = None
@@ -528,8 +590,8 @@ def plane_segments(plane, now_unix):
         segments.append(("from " + org, WHITE))
     elif dst:
         segments.append(("to " + dst, WHITE))
-    
-    segments.append((str(alt_ft) + " ft",     YELLOW))
+
+    segments.append((str(alt_ft) + " ft",      YELLOW))
     segments.append((str(speed_kts) + " knots", YELLOW))
 
     return segments
@@ -544,7 +606,10 @@ def main():
         scroll_message("Check WiFi settings", RED, loops=3)
         return
 
-    last_refresh = -REFRESH_SECS   # ensure an immediate fetch on startup
+    # Load persisted cache now that we have a real clock from NTP
+    load_cache()
+
+    last_refresh = -REFRESH_SECS
     planes  = []
     err_msg = None
 
@@ -563,29 +628,31 @@ def main():
                 err_msg = err
             last_refresh = utime.time()
 
-        # ── Display WAN config (IP address)────────────────────────────────
+        # ── Display WAN config (IP address) ───────────────────────────────
         if gu.is_pressed(GalacticUnicorn.SWITCH_D):
             display_wan_status()
 
         # ── Render ────────────────────────────────────────────────────────
         if err_msg:
             scroll_message("Err: " + err_msg, RED)
-
         elif not planes:
             scroll_message("No planes overhead", WHITE)
-
         else:
             for plane in planes:
                 if scroll_segments(plane_segments(plane, now)):
                     last_refresh = -REFRESH_SECS
                     break
 
-        # Ensure we don't run out of contiguous memory
+        # ── Memory management ─────────────────────────────────────────────
         gc.collect()
-
         if gc.mem_free() < 20000:
-            _fa_cache.clear()
-            gc.collect()
-            print("Low memory – cache cleared, free: " + str(gc.mem_free()))
+            # Evict the oldest 5 entries rather than clearing everything
+            if _fa_cache:
+                oldest = sorted(_fa_cache.items(), key=lambda x: x[1][1])[:5]
+                for k, _ in oldest:
+                    del _fa_cache[k]
+                save_cache()
+                gc.collect()
+                print("Low memory – evicted 5 oldest entries, free: " + str(gc.mem_free()))
 
 main()
