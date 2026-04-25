@@ -10,5 +10,5 @@ OPENSKY_CLIENT_ID     = ""
 OPENSKY_CLIENT_SECRET = ""
 
 # FlightAware AeroAPI key - get one free at flightaware.com/commercial/aeroapi
-# Free tier: 500 calls/month. With caching this is plenty.
+# Each call is $0.005, $5 free credit so 1000 free API calls/month
 AEROAPI_KEY = ""

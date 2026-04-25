@@ -403,6 +403,9 @@ def airline_name(code):
 _fa_cache = {}
 FA_CACHE_SECS = 600   # 10 minutes - route won't change mid-flight
 
+FA_CACHE_SECS         = 24*60*60   # 12 hours  – route never changes mid-flight
+FA_CACHE_MISS_SECS    = 4*60*60       # 4 hours  – retry unknown/GA aircraft less often
+
 def fetch_flightaware(callsign):
     """
     Query FlightAware AeroAPI for the current flight with this callsign.
@@ -448,12 +451,38 @@ def fetch_flightaware(callsign):
         print("Exception: " + str(e))
         return None
 
+def _is_commercial_callsign(callsign):
+    """
+    Returns True only for callsigns that look like scheduled airline flights
+    (3-letter ICAO operator code followed by 1-4 digits, e.g. BAW123, EZY4BV).
+    Filters out registrations like G-ABCD, N12345, and military callsigns.
+    """
+    if len(callsign) < 4:
+        return False
+    # First 3 chars should be letters (ICAO operator code)
+    if not callsign[:3].isalpha():
+        return False
+    # Must have at least one digit after the operator code
+    if not any(c.isdigit() for c in callsign[3:]):
+        return False
+    return True
+    
+_non_commercial_seen = set()
+
 def get_flightaware_cached(callsign, now_unix):
     """Return cached FlightAware info for callsign, fetching fresh if stale."""
+    if not _is_commercial_callsign(callsign):
+        if callsign not in _non_commercial_seen:
+            print("Non-commercial flight - skipping FlightAware call: " + callsign)
+            _non_commercial_seen.add(callsign)
+        return None
+
     if callsign in _fa_cache:
         info, cached_at = _fa_cache[callsign]
-        if now_unix - cached_at < FA_CACHE_SECS:
+        ttl = FA_CACHE_MISS_SECS if info is None else FA_CACHE_SECS
+        if now_unix - cached_at < ttl:
             return info
+
     info = fetch_flightaware(callsign)
     _fa_cache[callsign] = (info, now_unix)
     return info
