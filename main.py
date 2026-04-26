@@ -1,20 +1,9 @@
 """
-flight_tracker.py  –  Galactic Unicorn Overhead Flight Tracker
+Flight Tracker –  Galactic Unicorn Overhead Flight Tracker
 ================================================================
 Connects to Wi-Fi, polls the free OpenSky Network API for aircraft
 in a bounding box around YOUR_LAT / YOUR_LON, then scrolls the
 details of each plane across the 53x11 LED matrix.
-
-SETUP
------
-1. Flash the latest Pimoroni MicroPython UF2 onto your Galactic Unicorn
-   (from https://github.com/pimoroni/unicorn/releases)
-2. Edit the constants below (Wi-Fi, location, radius, OpenSky credentials).
-3. Copy this file to your Galactic Unicorn as  main.py  (via Thonny or mpremote).
-
-FREE API  - register at https://opensky-network.org then visit your Account
-page to create an API client and get your CLIENT_ID and CLIENT_SECRET.
-Authentication uses OAuth2 client credentials (username/password no longer works).
 
 DISPLAY
 -------
