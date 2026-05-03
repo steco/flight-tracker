@@ -482,30 +482,14 @@ def fetch_flightaware(callsign):
 
     AeroAPI endpoint: GET /flights/{ident}
     Docs: https://flightaware.com/commercial/aeroapi/documentation
-    """
-    global _fa_call_count, _fa_call_month
- 
+    """ 
     if not AEROAPI_KEY or AEROAPI_KEY == "YOUR_AEROAPI_KEY":
         return None
  
-    # Reset counter if we're in a new calendar month
-    current_month = utime.localtime()[1]
-    if current_month != _fa_call_month:
-        print("New month – resetting FA call counter (was " + str(_fa_call_count) + ")")
-        _fa_call_count = 0
-        _fa_call_month = current_month
-        save_cache()
- 
-    # Enforce monthly limit
-    if _fa_call_count >= FA_MONTHLY_LIMIT:
-        print("FA monthly limit reached (" + str(FA_MONTHLY_LIMIT) + ") – skipping: " + callsign)
-        return None
-
     url = "https://aeroapi.flightaware.com/aeroapi/flights/" + callsign
     headers = {"x-apikey": AEROAPI_KEY}
 
     try:
-        _fa_call_count += 1
         print("FlightAware call " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT) + ": " + callsign)
         resp = urequests.get(url, headers=headers)
 
@@ -542,6 +526,8 @@ def get_flightaware_cached(callsign, now_unix):
     Non-commercial callsigns are silently skipped after the first log message.
     Cache is persisted to flash so TTLs survive reboots.
     """
+    global _fa_call_count, _fa_call_month
+
     if not _is_commercial_callsign(callsign):
         if callsign not in _non_commercial_seen:
             print("Non-commercial - skipping: " + callsign)
@@ -554,6 +540,20 @@ def get_flightaware_cached(callsign, now_unix):
         if now_unix - cached_at < ttl:
             return info
 
+    # Reset counter if we're in a new calendar month
+    current_month = utime.localtime()[1]
+    if current_month != _fa_call_month:
+        print("New month – resetting FA call counter (was " + str(_fa_call_count) + ")")
+        _fa_call_count = 0
+        _fa_call_month = current_month
+        save_cache()
+ 
+    # Enforce monthly limit
+    if _fa_call_count >= FA_MONTHLY_LIMIT:
+        print("FA monthly limit reached (" + str(FA_MONTHLY_LIMIT) + ") – skipping: " + callsign)
+        return None
+
+    _fa_call_count += 1
     info = fetch_flightaware(callsign)
     _fa_cache[callsign] = (info, now_unix)
     save_cache()   # persist immediately after every new fetch
