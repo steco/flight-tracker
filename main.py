@@ -1,5 +1,5 @@
 """
-Flight Tracker –  Galactic Unicorn Overhead Flight Tracker
+Flight Tracker -  Galactic Unicorn Overhead Flight Tracker
 ================================================================
 Connects to Wi-Fi, polls the free OpenSky Network API for aircraft
 in a bounding box around YOUR_LAT / YOUR_LON, then scrolls the
@@ -30,9 +30,10 @@ import json
 import gc
 from galactic import GalacticUnicorn
 from picographics import PicoGraphics, DISPLAY_GALACTIC_UNICORN as DISPLAY
+import logger
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  USER CONFIGURATION  –  edit secrets.py, not this file
+#  USER CONFIGURATION  -  edit secrets.py, not this file
 # ─────────────────────────────────────────────────────────────────────────────
 try:
     from secrets import (
@@ -42,7 +43,7 @@ try:
         AEROAPI_KEY,
     )
 except ImportError:
-    raise SystemExit("secrets.py not found – copy secrets_template.py and fill it in")
+    raise SystemExit("secrets.py not found - copy secrets_template.py and fill it in")
 
 RADIUS_KM = 10      # Half-width of the search bounding box in km
 REFRESH_SECS = 60   # How often to re-poll the flight data API
@@ -70,8 +71,8 @@ TOKEN_URL = (
 TOKEN_REFRESH_MARGIN = 60
 
 # FlightAware cache TTLs (in seconds)
-FA_CACHE_SECS      = 7 * 24 * 60 * 60   # 7 days  – route data doesn't change
-FA_CACHE_MISS_SECS = 4 * 60 * 60         # 4 hours – retry failed lookups
+FA_CACHE_SECS      = 7 * 24 * 60 * 60   # 7 days  - route data doesn't change
+FA_CACHE_MISS_SECS = 4 * 60 * 60         # 4 hours - retry failed lookups
 
 # Path on the Pico filesystem where the FA cache is persisted
 CACHE_FILE = "fa_cache.json"
@@ -123,6 +124,7 @@ def connect_wifi():
         sync_ntp()
         display_wan_status()
         return True
+    logger.error("WiFi connect failed - check SSID/password in secrets.py")
     scroll_message("WiFi FAIL", RED)
     return False
 
@@ -131,23 +133,23 @@ def sync_ntp():
     for attempt in range(3):
         try:
             ntptime.settime()
-
             t = utime.localtime()
-            print("NTP sync OK – {:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(
+            logger.info("NTP sync OK - {:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(
                 t[0], t[1], t[2], t[3], t[4], t[5]
             ))
             return True
         except Exception as e:
-            print("NTP attempt " + str(attempt + 1) + " failed: " + str(e))
+            logger.warn("NTP attempt " + str(attempt + 1) + " failed: " + str(e))
             utime.sleep(2)
-    # Non-fatal – log it and carry on. Cache TTLs will be wrong but
+    # Non-fatal - log it and carry on. Cache TTLs will be wrong but
     # everything else will still work.
-    print("NTP sync failed – timestamps may be unreliable")
+    logger.error("NTP sync failed after 3 attempts - timestamps may be unreliable")
     scroll_message("NTP FAIL", RED)
     return False
 
 def display_wan_status():
     ip = wlan.ifconfig()[0]
+    logger.info("WiFi OK - IP: " + ip)
     scroll_message("WiFi OK  " + ip, GREEN)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,6 +237,7 @@ def _fetch_token():
         status = resp.status_code
         if status != 200:
             resp.close()
+            logger.error("OpenSky token request failed - HTTP " + str(status))
             return False, "Token HTTP " + str(status)
 
         data = resp.json()
@@ -243,9 +246,11 @@ def _fetch_token():
         _access_token  = data["access_token"]
         expires_in     = data.get("expires_in", 1800)
         _token_expires = utime.time() + expires_in - TOKEN_REFRESH_MARGIN
+        logger.info("OpenSky token refreshed - expires in " + str(expires_in) + "s")
         return True, None
 
     except Exception as e:
+        logger.error("OpenSky token exception: " + str(e))
         return False, str(e)
 
 def get_auth_headers():
@@ -282,15 +287,17 @@ def fetch_planes():
         "&lomax=" + str(round(LON_MAX, 4))
     )
 
-    try:        
+    try:
         resp = urequests.get(url, headers=headers)
         if resp.status_code == 401:
             _access_token = None
             resp.close()
+            logger.warn("OpenSky token rejected (401) - will re-auth on next poll")
             return None, "Token rejected, retry"
 
         if resp.status_code != 200:
             resp.close()
+            logger.error("OpenSky states/all HTTP " + str(resp.status_code))
             return None, "HTTP " + str(resp.status_code)
 
         data   = resp.json()
@@ -311,9 +318,11 @@ def fetch_planes():
                 "velocity_ms": s[9]  if s[9]  is not None else 0,
                 "heading":     s[10] if s[10] is not None else 0,
             })
+        logger.info("OpenSky poll OK - " + str(len(planes)) + " planes")
         return planes, None
 
     except Exception as e:
+        logger.error("OpenSky fetch exception: " + str(e))
         return None, str(e)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -385,7 +394,7 @@ AIRLINE_NAMES = {
     "SXN": "Saxonair",        "TAR": "Tunisair",        "XRO": "Xtra Airways",
     "VPC": "Viapontica",      "AIH": "Airest",          "BBB": "TUI Belgium",
     "CKS": "Conair",          "CLF": "Clifden Air",     "DNU": "Danube Wings",
-    "RUK": "Ryanair UK",      "SFS": "Safi Airways",
+    "RUK": "Ryanair UK",      "SFS": "Safi Airways",    "IBS": "Iberia Express",
     # Middle East
     "UAE": "Emirates",        "ETD": "Etihad",          "QTR": "Qatar",
     "THY": "Turkish",         "ELY": "El Al",           "SVA": "Saudi",
@@ -410,18 +419,18 @@ def airline_name(code):
         return None
     name = AIRLINE_NAMES.get(code.upper())
     if name is None:
-        print("Unknown airline code: " + code)
+        logger.info("Unknown airline code: " + code)
         return code.upper()
     return name
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  FlightAware cache  –  persisted to flash with real Unix timestamps
+#  FlightAware cache  -  persisted to flash with real Unix timestamps
 # ─────────────────────────────────────────────────────────────────────────────
 
 # In-memory cache: callsign -> (info_dict_or_None, cached_at_unix)
 _fa_cache = {}
 
-# Monthly API call counter – persisted in the same file as the cache
+# Monthly API call counter - persisted in the same file as the cache
 # Resets automatically when the calendar month changes
 _fa_call_count = 0    # calls made this calendar month
 _fa_call_month = 0    # month (1-12) the counter belongs to
@@ -444,11 +453,11 @@ def load_cache():
         meta = raw.get("__meta__", {})
         _fa_call_count = meta.get("call_count", 0)
         _fa_call_month = meta.get("call_month", 0)
-        print("Loaded " + str(len(_fa_cache)) + " FA cache entries from flash")
-        print("FA calls this month: " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT))
+        logger.info("Loaded " + str(len(_fa_cache)) + " FA cache entries from flash")
+        logger.info("FA calls this month: " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT))
     except Exception as e:
-        print("Cache load: " + str(e) + " (starting fresh)")
- 
+        logger.warn("Cache load failed: " + str(e) + " (starting fresh)")
+
 def save_cache():
     """Persist the current in-memory FA cache and monthly counter to flash."""
     try:
@@ -458,7 +467,7 @@ def save_cache():
         with open(CACHE_FILE, "w") as f:
             json.dump(raw, f)
     except Exception as e:
-        print("Cache save failed: " + str(e))
+        logger.error("Cache save failed: " + str(e))
 
 def _is_commercial_callsign(callsign):
     """
@@ -482,19 +491,20 @@ def fetch_flightaware(callsign):
 
     AeroAPI endpoint: GET /flights/{ident}
     Docs: https://flightaware.com/commercial/aeroapi/documentation
-    """ 
+    """
     if not AEROAPI_KEY or AEROAPI_KEY == "YOUR_AEROAPI_KEY":
         return None
- 
+
     url = "https://aeroapi.flightaware.com/aeroapi/flights/" + callsign
     headers = {"x-apikey": AEROAPI_KEY}
 
     try:
-        print("FlightAware call " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT) + ": " + callsign)
+        logger.info("FlightAware call " + str(_fa_call_count) + "/" + str(FA_MONTHLY_LIMIT) + ": " + callsign)
         resp = urequests.get(url, headers=headers)
 
         if resp.status_code != 200:
             resp.close()
+            logger.warn("AeroAPI HTTP " + str(resp.status_code) + " for " + callsign)
             return None
 
         data = resp.json()
@@ -517,7 +527,7 @@ def fetch_flightaware(callsign):
         }
 
     except Exception as e:
-        print("FA exception: " + str(e))
+        logger.error("FlightAware exception for " + callsign + ": " + str(e))
         return None
 
 def get_flightaware_cached(callsign, now_unix):
@@ -530,7 +540,7 @@ def get_flightaware_cached(callsign, now_unix):
 
     if not _is_commercial_callsign(callsign):
         if callsign not in _non_commercial_seen:
-            print("Non-commercial - skipping: " + callsign)
+            logger.info("Non-commercial callsign - skipping FA lookup: " + callsign)
             _non_commercial_seen.add(callsign)
         return None
 
@@ -543,14 +553,14 @@ def get_flightaware_cached(callsign, now_unix):
     # Reset counter if we're in a new calendar month
     current_month = utime.localtime()[1]
     if current_month != _fa_call_month:
-        print("New month – resetting FA call counter (was " + str(_fa_call_count) + ")")
+        logger.info("New month - resetting FA call counter (was " + str(_fa_call_count) + ")")
         _fa_call_count = 0
         _fa_call_month = current_month
         save_cache()
- 
+
     # Enforce monthly limit
     if _fa_call_count >= FA_MONTHLY_LIMIT:
-        print("FA monthly limit reached (" + str(FA_MONTHLY_LIMIT) + ") – skipping: " + callsign)
+        logger.warn("FA monthly limit reached (" + str(FA_MONTHLY_LIMIT) + ") - skipping: " + callsign)
         return None
 
     _fa_call_count += 1
@@ -572,7 +582,7 @@ def plane_segments(plane, now_unix):
 
    # Append route info from FlightAware if available
     info = get_flightaware_cached(callsign, now_unix)
-    
+
     org = None
     dst = None
     airline = None
@@ -585,7 +595,7 @@ def plane_segments(plane, now_unix):
         aircraft_type = info.get("type")
 
     segments = []
-    
+
     segments.append((callsign, CYAN))
 
     if airline:
@@ -611,7 +621,7 @@ def plane_segments(plane, now_unix):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    print("Starting...")
+    logger.info("Flight tracker starting")
     if not connect_wifi():
         scroll_message("Check WiFi settings", RED, loops=3)
         return
@@ -663,6 +673,23 @@ def main():
                     del _fa_cache[k]
                 save_cache()
                 gc.collect()
-                print("Low memory – evicted 5 oldest entries, free: " + str(gc.mem_free()))
+                logger.warn("Low memory - evicted 5 oldest FA cache entries, free: " + str(gc.mem_free()))
 
-main()
+        # ── Ship any buffered log entries ─────────────────────────────────
+        logger.flush_if_due()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Entry point  -  top-level exception catch ensures fatal exits are logged
+# ─────────────────────────────────────────────────────────────────────────────
+
+try:
+    main()
+except Exception as e:
+    logger.error("FATAL: main() exited with exception: " + str(e))
+    logger.flush()   # force-send immediately - don't wait for the batch cycle
+    try:
+        scroll_message("FATAL: " + str(e), RED, loops=5)
+    except Exception:
+        pass  # display may itself be broken - don't mask the original error
+    raise   # re-raise so the REPL/watchdog sees the full traceback
