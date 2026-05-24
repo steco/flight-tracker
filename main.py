@@ -395,6 +395,7 @@ AIRLINE_NAMES = {
     "VPC": "Viapontica",      "AIH": "Airest",          "BBB": "TUI Belgium",
     "CKS": "Conair",          "CLF": "Clifden Air",     "DNU": "Danube Wings",
     "RUK": "Ryanair UK",      "SFS": "Safi Airways",    "IBS": "Iberia Express",
+    "AJT": "AJet",            "WMT": "Wizz Air Malta",  "BOX": "AeroLogic",
     # Middle East
     "UAE": "Emirates",        "ETD": "Etihad",          "QTR": "Qatar",
     "THY": "Turkish",         "ELY": "El Al",           "SVA": "Saudi",
@@ -408,7 +409,9 @@ AIRLINE_NAMES = {
     "JAL": "Japan Airlines",  "QFA": "Qantas",          "ETH": "Ethiopian",
     "MSR": "EgyptAir",        "RAM": "Royal Air Maroc", "CES": "China Eastern",
     "AIC": "Air India",       "CSN": "China Southern",  "MAS": "Malaysia Airlines",
-    "IGO": "IndiGo",
+    "IGO": "IndiGo",          "KAL": "Korean Air",      "BBC": "Biman Bangladesh Airlines",
+    "LBT": "Nouvelair",       "TUA": "Turkmenistan Airlines",
+    "AAR": "Asiana Airlines",
     # Cargo
     "FDX": "FedEx",           "UPS": "UPS",             "BCS": "European Air",
     "DHL": "DHL Air",
