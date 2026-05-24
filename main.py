@@ -636,6 +636,10 @@ def main():
     while True:
         now = utime.time()
 
+        if not wlan.isconnected():
+            logger.warn("WiFi dropped - reconnecting")
+            connect_wifi()
+            
         # ── Refresh flight data ───────────────────────────────────────────
         force = gu.is_pressed(GalacticUnicorn.SWITCH_A)
         if force or (now - last_refresh) >= REFRESH_SECS:
