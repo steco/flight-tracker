@@ -17,6 +17,7 @@ Usage:
 
 import utime
 import ujson
+import gc
 
 try:
     import urequests
@@ -87,6 +88,7 @@ def error(msg):
 def flush():
     """Send all buffered entries to Honeycomb immediately. Silent on failure."""
     global _buffer, _last_flush_t
+    gc.collect()
     if not _buffer:
         _last_flush_t = utime.time()
         return
@@ -95,24 +97,28 @@ def flush():
         _last_flush_t = utime.time()
         return
     payload = ujson.dumps(_buffer)
-    _print("info", "Payload: " + payload)
     headers = {
         "X-Honeycomb-Team": HONEYCOMB_API_KEY,
         "Content-Type":     "application/json",
     }
     try:
         resp = urequests.post(HONEYCOMB_URL, data=payload, headers=headers)
+        del payload
         status = resp.status_code
         body = resp.text
         resp.close()
+        del body
         if status == 200:
             _buffer = []
+            _last_flush_t = utime.time()
             _print("info", "Flushed to Honeycomb OK")
         else:
-            _print("warn", "Honeycomb flush failed: " + str(status) + " " + body)
+            _print("warn", "Honeycomb flush failed: " + str(status))
     except Exception as e:
         _print("warn", "Honeycomb flush exception: " + str(e))
+    finally:
         _last_flush_t = utime.time()
+        gc.collect()
 
 def flush_if_due():
     """Call once per main-loop iteration. Flushes when batch is full or interval elapsed."""

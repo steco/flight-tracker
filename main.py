@@ -26,8 +26,8 @@ import urequests
 import utime
 import ntptime
 import math
-import json
 import gc
+import ujson
 from galactic import GalacticUnicorn
 from picographics import PicoGraphics, DISPLAY_GALACTIC_UNICORN as DISPLAY
 import logger
@@ -446,7 +446,7 @@ def load_cache():
     global _fa_call_count, _fa_call_month
     try:
         with open(CACHE_FILE, "r") as f:
-            raw = json.load(f)
+            raw = ujson.load(f)
         for k, v in raw.items():
             if k == "__meta__":
                 continue   # skip the metadata entry
@@ -462,13 +462,22 @@ def load_cache():
         logger.warn("Cache load failed: " + str(e) + " (starting fresh)")
 
 def save_cache():
-    """Persist the current in-memory FA cache and monthly counter to flash."""
     try:
-        raw = {"__meta__": {"call_count": _fa_call_count, "call_month": _fa_call_month}}
-        for k, (info, cached_at) in _fa_cache.items():
-            raw[k] = [info, cached_at]
         with open(CACHE_FILE, "w") as f:
-            json.dump(raw, f)
+            f.write('{"__meta__":{"call_count":')
+            f.write(str(_fa_call_count))
+            f.write(',"call_month":')
+            f.write(str(_fa_call_month))
+            f.write('}')
+            for k, (info, cached_at) in _fa_cache.items():
+                f.write(',')
+                f.write(ujson.dumps(k))
+                f.write(':[')
+                f.write(ujson.dumps(info))
+                f.write(',')
+                f.write(str(cached_at))
+                f.write(']')
+            f.write('}')
     except Exception as e:
         logger.error("Cache save failed: " + str(e))
 
@@ -498,7 +507,7 @@ def fetch_flightaware(callsign):
     if not AEROAPI_KEY or AEROAPI_KEY == "YOUR_AEROAPI_KEY":
         return None
 
-    url = "https://aeroapi.flightaware.com/aeroapi/flights/" + callsign
+    url = "https://aeroapi.flightaware.com/aeroapi/flights/" + callsign + "?max_pages=1"
     headers = {"x-apikey": AEROAPI_KEY}
 
     try:
@@ -507,12 +516,14 @@ def fetch_flightaware(callsign):
 
         if resp.status_code != 200:
             resp.close()
-            logger.warn("AeroAPI HTTP " + str(resp.status_code) + " for " + callsign)
+            logger.warn("FlightAware HTTP " + str(resp.status_code) + " for " + callsign)
             return None
 
-        data = resp.json()
+        raw = resp.text
         resp.close()
-
+        logger.info("FlightAware response size: " + str(len(raw)) + " bytes for " + callsign)
+        data = ujson.loads(raw)
+        
         # AeroAPI returns a "flights" list; first entry is the most recent/active
         flights = data.get("flights")
         if not flights:
@@ -672,7 +683,7 @@ def main():
 
         # ── Memory management ─────────────────────────────────────────────
         gc.collect()
-        if gc.mem_free() < 20000:
+        if gc.mem_free() < 40000:
             # Evict the oldest 5 entries rather than clearing everything
             if _fa_cache:
                 oldest = sorted(_fa_cache.items(), key=lambda x: x[1][1])[:5]
